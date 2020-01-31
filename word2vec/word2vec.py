@@ -88,9 +88,9 @@ def train(args,model,dataloader,word_to_idx,idx_to_word):
                     fout.write("epoch: {}, iteration: {}, simlex-999: {}, men: {}, sim353: {}, nearest to monster: {}\n".format(
                                 k, step, sim_simlex, sim_men, sim_353, find_nearest("monster",embedding_weights,word_to_idx,idx_to_word)))
 
-        embedding_weights = model.input_embeddings()
-        np.save("embedding-{}-{}-epoch".format(args.embed_size,k), embedding_weights)
-        torch.save(model.state_dict(), "embedding-{}-{}-epoch.th".format(args.embed_size,k))
+    embedding_weights = model.input_embeddings()
+    np.save("embedding-{}-epoch".format(args.embed_size), embedding_weights)
+    torch.save(model.state_dict(), "embedding-{}-epoch.th".format(args.embed_size))
 
 
 def evaluate(filename,embedding_weights,word_to_idx):
@@ -159,14 +159,10 @@ def main():
             evaluate("./worddata/men.txt", embedding_weights,word_to_idx),
             evaluate("./worddata/wordsim353.csv", embedding_weights,word_to_idx)))
 
-    print("simlex-999", evaluate("./worddata.simlex-999.txt", embedding_weights,word_to_idx))
-    print("men", evaluate("./worddata/men.txt", embedding_weights,word_to_idx))
-    print("wordsim353", evaluate("./worddata/wordsim353.csv", embedding_weights,word_to_idx))
-
-    with open(LOG_FILE, 'a') as fout:
         for word in ["good", "fresh", "monster", "green", "like", "america", "chicago", "work", "computer", "language"]:
-            print(word, find_nearest(word,embedding_weights,word_to_idx,idx_to_word))
-            fout.write("word:{}, nearest:{}\n".format(word,find_nearest(word,embedding_weights,word_to_idx,idx_to_word)))
+            nearest = find_nearest(word,embedding_weights,word_to_idx,idx_to_word)
+            print(word, nearest)
+            fout.write("word:{}, nearest:{}\n".format(word,nearest))
 
     man_idx = word_to_idx["man"]
     king_idx = word_to_idx["king"]
