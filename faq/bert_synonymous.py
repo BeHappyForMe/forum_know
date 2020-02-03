@@ -95,24 +95,23 @@ class FAQProcessor(DataProcessor):
 
             questions = evulate_df['your_question'].tolist()
             matched_questions = evulate_df['matched_question'].tolist()
+            # 用于计算mrr指标
+            matched_questions_indexs = []
+            for q in matched_questions:
+                flag = False
+                for i, _q in enumerate(self.candidate_title):
+                    if q == _q:
+                        matched_questions_indexs.append([i])
+                        flag = True
+                        break
+                if not flag:
+                    # 没找到匹配的
+                    matched_questions_indexs.append([-1])
+            matched_questions_indexs = np.asarray(matched_questions_indexs)
             if data_type == 'eval_cosine':
-                # 用于计算mrr指标
-                matched_questions_indexs = []
-                for q in matched_questions:
-                    flag = False
-                    for i, _q in enumerate(self.candidate_title):
-                        if q == _q:
-                            matched_questions_indexs.append([i])
-                            flag = True
-                            break
-                    if not flag:
-                        # 没找到匹配的
-                        matched_questions_indexs.append([-1])
-                matched_questions_indexs = np.asarray(matched_questions_indexs)
                 examples = [
                     InputExample(guid="%s_%s_%s" % ('eval', data_type, idx), text_a=question, text_b=None, label=1)
                     for idx, question in enumerate(questions)]
-                
             elif data_type == 'eval_concate':
                 examples = []
                 for (idx, (line_a, line_b)) in enumerate(zip(questions, matched_questions)):
@@ -406,42 +405,64 @@ def evaluate(args,model,tokenizer, processor,eval_dataset,matched_questions_inde
 
     return results
 
-def predict(args, model, eval_dataset):
-    # 把所有的问题与新问题pair全部用BERT编码
+def predict(args, model, dataset,tokenizer,processor):
     # 输出score
     scores = []
 
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     # Note that DistributedSampler samples randomly
-    eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
+    eval_sampler = SequentialSampler(dataset)
+    eval_dataloader = DataLoader(dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
     # multi-gpu eval
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
     # Eval!
-    logger.info("  Num examples = %d", len(eval_dataset))
+    logger.info("  Num examples = %d", len(dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    eval_loss = 0.0
-    nb_eval_steps = 0
-    preds = None
-    out_label_ids = None
-    for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        model.eval()
-        batch = tuple(t.to(args.device) for t in batch)
+    if args.loss_type == 'cosine':
+        original_dataset, _ = load_and_cache_examples(args, args.task_name, tokenizer, processor,
+                                                           data_type='eval_original')
+        original_sampler = SequentialSampler(original_dataset)
+        original_dataset = DataLoader(original_dataset, sampler=original_sampler,batch_size=args.eval_batch_size)
+        original_iterator = tqdm(original_dataset, desc="Original_Iteration",disable=args.local_rank not in [-1, 0])
+        original_embeddings = []
+        eval_question_embeddings = []
+        for step, batch in enumerate(original_iterator):
+            model.eval()
+            batch = tuple(t.to(args.device) for t in batch)
+            with torch.no_grad():
+                original_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+                original_outputs = model(**original_inputs)[0].mean(1)
+                original_embeddings.append(original_outputs)
+        original_embeddings = torch.cat([embed.cpu().data for embed in original_embeddings]).numpy()
+        for batch in tqdm(eval_dataloader, desc="Evaluating"):
+            model.eval()
+            batch = tuple(t.to(args.device) for t in batch)
+            with torch.no_grad():
+                eval_question_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+                eval_questions_outputs = model(**eval_question_inputs)[0].mean(1)
+                eval_question_embeddings.append(eval_questions_outputs)
+        eval_question_embeddings = torch.cat([o.cpu().data for o in eval_question_embeddings]).numpy()
 
-        with torch.no_grad():
-            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-            outputs = model(**inputs)
+        scores = cosine_similarity(eval_question_embeddings, original_embeddings)
+    else:
+        for batch in tqdm(eval_dataloader, desc="Evaluating"):
+            model.eval()
+            batch = tuple(t.to(args.device) for t in batch)
 
-            score = outputs[0]
-            scores.append(score)
+            with torch.no_grad():
+                inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+                outputs = model(**inputs)
 
-    scores = [score.data.cpu().view(-1) for score in scores]
-    scores = torch.cat(scores)
+                score = outputs[0]
+                scores.append(score)
 
-    return scores.numpy()
+        scores = [score.data.cpu().view(-1) for score in scores]
+        scores = torch.cat(scores).numpy()
+
+    return scores
 
 def load_and_cache_examples(args, task, tokenizer,processor,data_type='eval_cosine'):
     """
@@ -765,25 +786,28 @@ def main():
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
             results.update(result)
 
-    #TODO
     if args.do_predict:
+        model = model_class.from_pretrained(args.output_dir)
+        tokenizer = tokenizer_class.from_pretrained(args.output_dir)
+        model.to(args.device)
         while True:
             title = input("你的问题是？\n")
             if len(title.strip()) == 0:
                 continue
-
-            #将输入问题与所有训练数据的title组成句子pair，分别计算出score
-            examples = [InputExample(guid=0, text_a=title, text_b=c, label=1) for c in candidate_title]
+            if args.loss_type == 'cosine':
+                examples = [InputExample(guid=0, text_a=title, text_b=None, label=1)]
+            else:
+                examples = [InputExample(guid=0, text_a=title, text_b=c, label=1) for c in candidate_title]
             features = convert_examples_to_features(
-                examples,
-                tokenizer,
-                label_list=[1],
-                output_mode="classification",
-                max_length=args.max_seq_length,
-                pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
-                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
-            )
+                    examples,
+                    tokenizer,
+                    label_list=[1],
+                    output_mode="classification",
+                    max_length=args.max_seq_length,
+                    pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
+                    pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                    pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+                )
 
             # Convert to Tensors and build dataset
             all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
@@ -791,12 +815,13 @@ def main():
             all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
 
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids)
-            scores = evaluate(args, model, dataset)
+            scores = predict(args, model, dataset,tokenizer,processor)
             top5_indices = scores.argsort()[-5:][::-1]
             for index in top5_indices:
                 print("可能的答案，参考问题：" + candidate_title[index] + "\t答案：" + candidate_reply[index] + "\t得分：" + str(
                     scores[index]))
                 print()
+
 
 if __name__ == "__main__":
     main()
