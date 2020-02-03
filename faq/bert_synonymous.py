@@ -240,9 +240,8 @@ def train(args, train_dataset, model, processor, tokenizer):
     )
     set_seed(args)
     for k in train_iterator:
-        # TODO 这是为啥
-        # if k!=0:
-        #     train_dataset,_,_=load_examples(args,args.task_name,tokenizer,processor)
+        if k!=0:
+            train_dataset,_,_= load_train_examples(args,args.task_name,tokenizer,processor)
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
         train_sampler = SequentialSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,sampler=train_sampler,batch_size=args.train_batch_size)
@@ -514,34 +513,23 @@ def load_train_examples(args,task,tokenizer,processor):
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
-    cached_features_file = os.path.join(
-        args.data_dir,
-        "cached_{}_{}_{}".format(
-            "train",
-            str(args.max_seq_length),
-            str(task),
-        ),
-    )
-    if os.path.exists(cached_features_file):
-        features = torch.load(cached_features_file)
-    else:
-        datas = processor.get_train(args.loss_type)
-        # Load data features from cache or dataset file
-        logger.info("Creating features from dataset file at %s", args.data_dir)
-        features = []
-        for data in datas:
-            feature = convert_examples_to_features(
-                data,
-                tokenizer,
-                label_list=[1],
-                output_mode="classification",
-                max_length=args.max_seq_length,
-                pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
-                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
-            )
-            features.append(feature)
-        torch.save(features,cached_features_file)
+    # 训练数据的features不做缓存，使每个epoch的正例、负例不一样
+    datas = processor.get_train(args.loss_type)
+    # Load data features from cache or dataset file
+    logger.info("Creating features from dataset file at %s", args.data_dir)
+    features = []
+    for data in datas:
+        feature = convert_examples_to_features(
+            data,
+            tokenizer,
+            label_list=[1],
+            output_mode="classification",
+            max_length=args.max_seq_length,
+            pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
+            pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+            pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+        )
+        features.append(feature)
     # Convert to Tensors and build dataset
     if args.loss_type == 'concate':
         pos_input_ids = torch.tensor([f.input_ids for f in features[0]], dtype=torch.long)
@@ -615,7 +603,7 @@ def main():
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--margin", default=1, type=float, help="The margin of hinge loss.")
-    parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
+    parser.add_argument("--learning_rate", default=1e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
@@ -775,12 +763,12 @@ def main():
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-            prefix = checkpoint.split("/")[-1] if checkpoint.find("checkpoint") != -1 else ""
+            prefix = "checkpoint-" + str(checkpoint.split("-")[-1]) if checkpoint.find("checkpoint") != -1 else ""
 
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
             data_type = 'eval_cosine' if args.loss_type == 'cosine' else 'eval_concate'
-            eval_dataset, matched_questions_indexs = load_and_cache_examples(args, args.tas_name, tokenizer, processor,
+            eval_dataset, matched_questions_indexs = load_and_cache_examples(args, args.task_name, tokenizer, processor,
                                                                              data_type=data_type)
             result = evaluate(args, model, tokenizer, processor, eval_dataset, matched_questions_indexs,prefix=prefix)
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
