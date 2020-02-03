@@ -83,7 +83,7 @@ class FAQProcessor(DataProcessor):
 
     def get_evaluate(self,file_dir,data_type):
         examples = None
-        matched_questions = None
+        matched_questions_indexs = None
         if data_type == 'eval_original':
             examples = [InputExample(guid="%s_%s_%s" % ('eval', data_type, idx), text_a=title, text_b=None, label=1) 
                         for idx,title in enumerate(self.candidate_title)]
@@ -291,10 +291,10 @@ def train(args, train_dataset, model, processor, tokenizer):
                     logs = {}
                     # 对于cosine可以用mrr评估，对于concate用score>0.5评估准确率
                     if (
-                        args.local_rank == -1 and args.evaluate_during_training
+                        args.local_rank == -1 and args.evaluate_during_training and global_step % args.save_steps == 0
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
                         data_type = 'eval_cosine' if args.loss_type == 'cosine' else 'eval_concate'
-                        eval_dataset,matched_questions_indexs = load_and_cache_examples(args,args.tas_name,tokenizer,processor,data_type=data_type)
+                        eval_dataset,matched_questions_indexs = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type=data_type)
                         results = evaluate(args, model, tokenizer, processor,eval_dataset,matched_questions_indexs)
                         for key, value in results.items():
                             eval_key = "eval_{}".format(key)
@@ -343,15 +343,17 @@ def evaluate(args,model,tokenizer, processor,eval_dataset,matched_questions_inde
         model = torch.nn.DataParallel(model)
 
     eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.train_batch_size)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
     # Eval!
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     epoch_iterator = tqdm(eval_dataloader, desc="Eval_Iteration", disable=args.local_rank not in [-1, 0])
 
     if args.loss_type == 'cosine':
-        eval_original,_ = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type='eval_original')
-        original_iterator = tqdm(eval_original, desc="Original_Iteration", disable=args.local_rank not in [-1, 0])
+        eval_original_dataset,_ = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type='eval_original')
+        eval_original_sampler = SequentialSampler(eval_original_dataset)
+        eval_original_dataloader = DataLoader(eval_original_dataset,sampler=eval_original_sampler,batch_size=args.eval_batch_size)
+        original_iterator = tqdm(eval_original_dataloader, desc="Original_Iteration", disable=args.local_rank not in [-1, 0])
         original_embeddings = []
         eval_question_embeddings = []
         for step,batch in enumerate(original_iterator):
@@ -464,7 +466,7 @@ def load_and_cache_examples(args, task, tokenizer,processor,data_type='eval_cosi
         features,matched_questions_indexs = torch.load(cached_features_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
-        examples,matched_questions_indexs = processor.get_evaluate(args.data_dir,args.data_type)
+        examples,matched_questions_indexs = processor.get_evaluate(args.data_dir,data_type)
         features = convert_examples_to_features(
             examples,
             tokenizer,
@@ -558,7 +560,7 @@ def main():
     parser.add_argument("--loss_type",default="cosine",type=str,required=False,
                         choices=['cosine','concate'])
 
-    parser.add_argument("--model_name_or_path",default='/Users/zhoup/develop/NLPSpace/my-pre-models/chinese_wwm_pytorch',type=str,required=False,
+    parser.add_argument("--model_name_or_path",default='D:\\NLP\\my-wholes-models\\chinese_wwm_pytorch\\',type=str,required=False,
         help="Path to pre-trained model or shortcut name selected in the list",)
     parser.add_argument("--task_name",default='synonymous_faq',type=str,required=False,
         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()),)
@@ -575,13 +577,13 @@ def main():
     parser.add_argument("--do_eval",default=True, action="store_true", help="Whether to run eval on the dev set.")
     parser.add_argument("--do_predict", action="store_true", help="Whether to predict.")
     parser.add_argument(
-        "--evaluate_during_training", default=True ,action="store_true", help="Rul evaluation during training at each logging step."
+        "--evaluate_during_training" ,action="store_true", help="Rul evaluation during training at each logging step."
     )
     parser.add_argument(
         "--do_lower_case",default=True, action="store_true", help="Set this flag if you are using an uncased model."
     )
 
-    parser.add_argument("--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.")
+    parser.add_argument("--per_gpu_train_batch_size", default=4, type=int, help="Batch size per GPU/CPU for training.")
     parser.add_argument(
         "--per_gpu_eval_batch_size", default=8, type=int, help="Batch size per GPU/CPU for evaluation."
     )
@@ -607,7 +609,7 @@ def main():
     )
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
 
-    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps.")
+    parser.add_argument("--logging_steps", type=int, default=200, help="Log every X updates steps.")
     parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--eval_all_checkpoints",
