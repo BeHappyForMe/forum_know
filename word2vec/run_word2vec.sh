@@ -5,6 +5,6 @@ python word2vec.py \
     --max_vocab_size 30000 \
     --embed_size 200 \
     --C 5   \
-    --k 100 \
+    --K 100 \
     --num_epoch 5 \
     --learnning_rate 5e-4
