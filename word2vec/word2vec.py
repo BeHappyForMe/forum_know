@@ -29,6 +29,7 @@ def prepare_data(args):
     idx_to_word = [word for word in vocab.keys()]
     word_to_idx = {word:idx for idx,word in enumerate(idx_to_word)}
 
+    # negsample的采样概率分布
     word_counts = np.asarray([value for value in vocab.values()],dtype=np.float32)
     word_freqs = word_counts / np.sum(word_counts)
     word_freqs = word_freqs ** (3./4.)
@@ -55,6 +56,7 @@ def train(args,model,dataloader,word_to_idx,idx_to_word):
     train_iterator = trange(args.num_epoch,desc="epoch")
     tr_loss = 0.
     logg_loss = 0.
+    global_step = 0
     for k in train_iterator:
         print("the {} epoch beginning!".format(k))
         epoch_iteration = tqdm(dataloader,desc="iteration")
@@ -66,16 +68,17 @@ def train(args,model,dataloader,word_to_idx,idx_to_word):
             loss.backward()
             optimizer.step()
             scheduler.step()
+            global_step +=1
 
             tr_loss += loss.item()
             if (step+1) % 100 == 0:
                 loss_scalar = (tr_loss - logg_loss) / 100
                 logg_loss = tr_loss
                 with open(LOG_FILE, "a") as fout:
-                    fout.write("epoch: {}, iter: {}, loss: {}\n".format(k, step, loss_scalar))
+                    fout.write("epoch: {}, iter: {}, loss: {},learn_rate: {}\n".format(k, step, loss_scalar,scheduler.get_lr()[0]))
                     print("epoch: {}, iter: {}, loss: {}, learning_rate: {}".format(k, step, loss_scalar,scheduler.get_lr()[0]))
-                    tb_writer.add_scalar("learning_rate",scheduler.get_lr()[0])
-                    tb_writer.add_scalar("loss",loss_scalar)
+                    tb_writer.add_scalar("learning_rate",scheduler.get_lr()[0],global_step)
+                    tb_writer.add_scalar("loss",loss_scalar,global_step)
 
             if (step+1) % 2000 == 0:
                 embedding_weights = model.input_embeddings()
@@ -89,8 +92,8 @@ def train(args,model,dataloader,word_to_idx,idx_to_word):
                                 k, step, sim_simlex, sim_men, sim_353, find_nearest("monster",embedding_weights,word_to_idx,idx_to_word)))
 
     embedding_weights = model.input_embeddings()
-    np.save("embedding-{}-epoch".format(args.embed_size), embedding_weights)
-    torch.save(model.state_dict(), "embedding-{}-epoch.th".format(args.embed_size))
+    np.save("embedding-{}".format(args.embed_size), embedding_weights)
+    torch.save(model.state_dict(), "embedding-{}.th".format(args.embed_size))
 
 
 def evaluate(filename,embedding_weights,word_to_idx):
@@ -127,8 +130,8 @@ def main():
     parse.add_argument("--data_dir",default="./worddata/text8.train.txt",type=str,required=False)
     parse.add_argument("--batch_size", default=16, type=int)
     parse.add_argument("--do_train",default=True, action="store_true", help="Whether to run training.")
-    parse.add_argument("--learnning_rate", default=5e-5, type=float)
-    parse.add_argument("--num_epoch", default=5, type=int)
+    parse.add_argument("--learnning_rate", default=5e-4, type=float)
+    parse.add_argument("--num_epoch", default=2, type=int)
     parse.add_argument("--max_vocab_size",default=30000,type=int)
     parse.add_argument("--embed_size",default=200,type=int)
     parse.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
@@ -155,7 +158,7 @@ def main():
 
     with open(LOG_FILE,'a') as fout:
         fout.write("simlex-999: {}, men: {}, sim353: {}\n".format(
-            evaluate("./worddata.simlex-999.txt", embedding_weights,word_to_idx),
+            evaluate("./worddata/simlex-999.txt", embedding_weights,word_to_idx),
             evaluate("./worddata/men.txt", embedding_weights,word_to_idx),
             evaluate("./worddata/wordsim353.csv", embedding_weights,word_to_idx)))
 
@@ -175,7 +178,6 @@ def main():
         for i in scores[:20]:
             print(idx_to_word[i])
             fout.write("the nearest to <women-man+king> : {}\n".format(idx_to_word[i]))
-
 
 
 if __name__ == '__main__':
