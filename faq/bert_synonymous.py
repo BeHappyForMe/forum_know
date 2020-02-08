@@ -77,7 +77,7 @@ class FAQProcessor(DataProcessor):
         self.candidate_translated = train_df['translated'].astype("str").tolist()
         self.cv = TfidfVectorizer(tokenizer=lambda x:x.split())
 
-    def get_train(self,set_type):
+    def get_train(self):
         """  """
         return self._create_examples(self.candidate_title,self.candidate_translated)
 
@@ -425,7 +425,7 @@ def load_train_examples(args,task,tokenizer,processor):
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
     # 训练数据的features不做缓存，使每个epoch的正例、负例不一样
-    datas = processor.get_train(args.loss_type)
+    datas = processor.get_train()
     # Load data features from cache or dataset file
     logger.info("Creating features from dataset file at %s", args.data_dir)
     features = []
@@ -480,9 +480,9 @@ def main():
     parser.add_argument("--max_seq_length",default=256,type=int,
         help="The maximum total input sequence length after tokenization. Sequences longer "
              "than this will be truncated, sequences shorter will be padded.",)
-    parser.add_argument("--do_train",default=True, action="store_true", help="Whether to run training.")
+    parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval",default=True, action="store_true", help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_predict",default=True, action="store_true", help="Whether to predict.")
+    parser.add_argument("--do_predict", action="store_true", help="Whether to predict.")
     parser.add_argument(
         "--evaluate_during_training" ,action="store_true", help="Rul evaluation during training at each logging step."
     )
