@@ -78,8 +78,8 @@ class FAQProcessor(DataProcessor):
         self.cv = TfidfVectorizer(tokenizer=lambda x:x.split())
 
     def get_train(self,set_type):
-        """根据训练方式不同获取不同格式训练数据"""
-        return self._create_examples(self.candidate_title,self.candidate_translated,set_type)
+        """  """
+        return self._create_examples(self.candidate_title,self.candidate_translated)
 
     def get_evaluate(self,file_dir,data_type):
         examples = None
@@ -108,94 +108,34 @@ class FAQProcessor(DataProcessor):
                     # 没找到匹配的
                     matched_questions_indexs.append([-1])
             matched_questions_indexs = np.asarray(matched_questions_indexs)
-            if data_type == 'eval_cosine':
-                examples = [
-                    InputExample(guid="%s_%s_%s" % ('eval', data_type, idx), text_a=question, text_b=None, label=1)
+            examples = [InputExample(guid="%s_%s_%s" % ('eval', data_type, idx), text_a=question, text_b=None, label=1)
                     for idx, question in enumerate(questions)]
-            elif data_type == 'eval_concate':
-                examples = []
-                for (idx, (line_a, line_b)) in enumerate(zip(questions, matched_questions)):
-                    guid = "%s_%s_%s" % (data_type, 'pos', idx)
-                    examples.append(InputExample(guid=guid, text_a=line_a, text_b=line_b, label=1))
                     
         return examples, matched_questions_indexs
 
-    def _create_examples(self,lines_a,lines_b,set_type):
-        if set_type == 'cosine':
-            original_examples = []
-            pos_examples = []
-            neg_examples = []
-            for (i, (line_a, line_b)) in enumerate(zip(lines_a, lines_b)):
-                original_guid = "%s_%s_%s" % (set_type, 'original', i)
-                original_examples.append(InputExample(guid=original_guid, text_a=line_a, text_b=None, label=1))
+    def _create_examples(self,lines_a,lines_b):
 
-                pos_guid = "%s_%s_%s" % (set_type, 'pos', i)
-                pos_examples.append(InputExample(guid=pos_guid, text_a=line_b, text_b=None, label=1))
+        original_examples = []
+        pos_examples = []
+        neg_examples = []
+        for (i, (line_a, line_b)) in enumerate(zip(lines_a, lines_b)):
+            original_guid = "%s_%s_%s" % ("train",'original', i)
+            original_examples.append(InputExample(guid=original_guid, text_a=line_a, text_b=None, label=1))
 
-                neg_guid = "%s_%s_%s" % (set_type, 'neg', i)
-                neg_line = self.get_neg_sent(line_a)
-                neg_examples.append(InputExample(guid=neg_guid, text_a=neg_line, text_b=None, label=1))
-            return original_examples, pos_examples, neg_examples
-        elif set_type == 'concate':
-            """创建pair句子对训练数据"""
-            pos_examples = []
-            neg_examples = []
-            for (i, (line_a, line_b)) in enumerate(zip(lines_a, lines_b)):
-                pos_guid = "%s_%s_%s" % (set_type, 'pos', i)
-                pos_examples.append(InputExample(guid=pos_guid, text_a=line_a, text_b=line_b, label=1))
+            pos_guid = "%s_%s_%s" % ("train", 'pos', i)
+            pos_examples.append(InputExample(guid=pos_guid, text_a=line_b, text_b=None, label=1))
 
-                neg_guid = "%s_%s_%s" % (set_type, 'neg', i)
-                neg_line = self.get_neg_sent(line_a)
-                neg_examples.append(InputExample(guid=neg_guid, text_a=line_a, text_b=neg_line, label=1))
-            return pos_examples, neg_examples
+            neg_guid = "%s_%s_%s" % ("train", 'neg', i)
+            neg_line = self.get_neg_sent(line_a)
+            neg_examples.append(InputExample(guid=neg_guid, text_a=neg_line, text_b=None, label=1))
+
+        return original_examples, pos_examples, neg_examples
 
     def get_neg_sent(self,original):
         # 随机取10个，再取tf-idf最大的作为neg(即不是同义句但相似度很高)
         neg_lines = random.sample(self.candidate_title,10)
         neg_line = tfidf_similarity(self.cv,original,neg_lines)
         return neg_line
-
-class BertForFAQHinge(BertPreTrainedModel):
-
-    def __init__(self, config):
-        super(BertForFAQHinge, self).__init__(config)
-        self.num_labels = config.num_labels
-
-        self.bert = BertModel(config)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.scoring = nn.Linear(config.hidden_size, 1)
-
-        self.init_weights()
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,
-    ):
-
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-        )
-
-        sequence_out = outputs[0]
-        sequence_out = sequence_out.mean(1)
-
-        sequence_out = self.dropout(sequence_out)
-        score = F.tanh(self.scoring(sequence_out))
-
-        outputs = (score,) + outputs[2:]  # add hidden states and attention if they are here
-
-        return outputs  # score, (hidden_states), (attentions)
 
 def train(args, train_dataset, model, processor, tokenizer):
     """ train the model """
@@ -254,23 +194,14 @@ def train(args, train_dataset, model, processor, tokenizer):
 
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            if args.loss_type == 'concate':
-                pos_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                neg_inputs = {"input_ids": batch[3], "attention_mask": batch[4], "token_type_ids": batch[5]}
-                # 分别训练同义句pair，及非同义句pari使用hingeloss计算损失
-                pos_outputs = model(**pos_inputs)
-                neg_outputs = model(**neg_inputs)
-                pos_score = pos_outputs[0]
-                neg_score = neg_outputs[0]
-            elif args.loss_type == 'cosine':
-                original_inputs =  {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                pos_inputs = {"input_ids": batch[3], "attention_mask": batch[4], "token_type_ids": batch[5]}
-                neg_inputs = {"input_ids": batch[6], "attention_mask": batch[7], "token_type_ids": batch[8]}
-                original_outputs = model(**original_inputs)[0].mean(1)
-                pos_outputs = model(**pos_inputs)[0].mean(1)
-                neg_outputs = model(**neg_inputs)[0].mean(1)
-                pos_score = F.cosine_similarity(original_outputs,pos_outputs)
-                neg_score = F.cosine_similarity(original_outputs,neg_outputs)
+            original_inputs =  {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+            pos_inputs = {"input_ids": batch[3], "attention_mask": batch[4], "token_type_ids": batch[5]}
+            neg_inputs = {"input_ids": batch[6], "attention_mask": batch[7], "token_type_ids": batch[8]}
+            original_outputs = model(**original_inputs)[0].mean(1)
+            pos_outputs = model(**pos_inputs)[0].mean(1)
+            neg_outputs = model(**neg_inputs)[0].mean(1)
+            pos_score = F.cosine_similarity(original_outputs,pos_outputs)
+            neg_score = F.cosine_similarity(original_outputs,neg_outputs)
 
             #计算hingeloss
             loss = args.margin + neg_score - pos_score
@@ -287,12 +218,11 @@ def train(args, train_dataset, model, processor, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     logs = {}
-                    # 对于cosine可以用mrr评估，对于concate用score>0.5评估准确率
+                    # 可以用mrr评估
                     if (
                         args.local_rank == -1 and args.evaluate_during_training and global_step % args.save_steps == 0
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
-                        data_type = 'eval_cosine' if args.loss_type == 'cosine' else 'eval_concate'
-                        eval_dataset,matched_questions_indexs = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type=data_type)
+                        eval_dataset,matched_questions_indexs = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type="eval_cosine")
                         results = evaluate(args, model, tokenizer, processor,eval_dataset,matched_questions_indexs)
                         for key, value in results.items():
                             eval_key = "eval_{}".format(key)
@@ -331,7 +261,6 @@ def train(args, train_dataset, model, processor, tokenizer):
 
 def evaluate(args,model,tokenizer, processor,eval_dataset,matched_questions_indexs,prefix=""):
 
-    # 对于cosine、concate评估方式不同，cosine计算mrr，concate计算acc
     results = {}
     if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(args.output_dir)
@@ -347,53 +276,37 @@ def evaluate(args,model,tokenizer, processor,eval_dataset,matched_questions_inde
     logger.info("  Batch size = %d", args.eval_batch_size)
     epoch_iterator = tqdm(eval_dataloader, desc="Eval_Iteration", disable=args.local_rank not in [-1, 0])
 
-    if args.loss_type == 'cosine':
-        eval_original_dataset,_ = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type='eval_original')
-        eval_original_sampler = SequentialSampler(eval_original_dataset)
-        eval_original_dataloader = DataLoader(eval_original_dataset,sampler=eval_original_sampler,batch_size=args.eval_batch_size)
-        original_iterator = tqdm(eval_original_dataloader, desc="Original_Iteration", disable=args.local_rank not in [-1, 0])
-        original_embeddings = []
-        eval_question_embeddings = []
-        for step,batch in enumerate(original_iterator):
-            model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
-            with torch.no_grad():
-                original_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                original_outputs = model(**original_inputs)[0].mean(1)
-                original_embeddings.append(original_outputs)
-        original_embeddings = torch.cat([embed.cpu().data for embed in original_embeddings]).numpy()
-        for step,batch in enumerate(epoch_iterator):
-            model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
-            with torch.no_grad():
-                eval_question_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                eval_questions_outputs = model(**eval_question_inputs)[0].mean(1)
-                eval_question_embeddings.append(eval_questions_outputs)
-        eval_question_embeddings = torch.cat([o.cpu().data for o in eval_question_embeddings]).numpy()
+    eval_original_dataset,_ = load_and_cache_examples(args,args.task_name,tokenizer,processor,data_type='eval_original')
+    eval_original_sampler = SequentialSampler(eval_original_dataset)
+    eval_original_dataloader = DataLoader(eval_original_dataset,sampler=eval_original_sampler,batch_size=args.eval_batch_size)
+    original_iterator = tqdm(eval_original_dataloader, desc="Original_Iteration", disable=args.local_rank not in [-1, 0])
+    original_embeddings = []
+    eval_question_embeddings = []
+    for step,batch in enumerate(original_iterator):
+        model.eval()
+        batch = tuple(t.to(args.device) for t in batch)
+        with torch.no_grad():
+            original_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+            original_outputs = model(**original_inputs)[0].mean(1)
+            original_embeddings.append(original_outputs)
+    original_embeddings = torch.cat([embed.cpu().data for embed in original_embeddings]).numpy()
+    for step,batch in enumerate(epoch_iterator):
+        model.eval()
+        batch = tuple(t.to(args.device) for t in batch)
+        with torch.no_grad():
+            eval_question_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+            eval_questions_outputs = model(**eval_question_inputs)[0].mean(1)
+            eval_question_embeddings.append(eval_questions_outputs)
+    eval_question_embeddings = torch.cat([o.cpu().data for o in eval_question_embeddings]).numpy()
 
-        scores = cosine_similarity(eval_question_embeddings,original_embeddings)
-        sorted_indices = scores.argsort()[:,::-1]
-        mmr = mean_reciprocal_rank(matched_questions_indexs == sorted_indices)
-        map = mean_average_precision(matched_questions_indexs == sorted_indices)
-        print("mean reciprocal rank: {}".format(mmr))
-        print("mean average precision: {}".format(map))
-        results['mmr'] = mmr
-        results['map'] = map
-
-    elif args.loss_type == 'concate':
-        scores = []
-        for step, batch in enumerate(epoch_iterator):
-            model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
-            with torch.no_grad():
-                inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                outputs = model(**inputs)
-                score = outputs[0]
-                scores.append(score)
-        scores = torch.cat([o.cpu().data for o in scores]).numpy().reshape((-1))
-        acc = scores[scores>0.5].sum()/len(scores)
-        print("concate acc: {}".format(acc))
-        results['acc'] = acc
+    scores = cosine_similarity(eval_question_embeddings,original_embeddings)
+    sorted_indices = scores.argsort()[:,::-1]
+    mmr = mean_reciprocal_rank(matched_questions_indexs == sorted_indices)
+    map = mean_average_precision(matched_questions_indexs == sorted_indices)
+    print("mean reciprocal rank: {}".format(mmr))
+    print("mean average precision: {}".format(map))
+    results['mmr'] = mmr
+    results['map'] = map
 
     output_eval_file = os.path.join(args.output_dir,prefix, "eval_results.txt")
     with open(output_eval_file, "w") as writer:
@@ -420,14 +333,25 @@ def predict(args, model, dataset,tokenizer,processor):
     # Eval!
     logger.info("  Num examples = %d", len(dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    if args.loss_type == 'cosine':
+
+    cached_predict_original_embeddings = os.path.join(
+        args.data_dir,
+        "cached_{}_{}_{}".format(
+            "pred",
+            'original',
+            'embeddings',
+        ),
+    )
+    if os.path.exists(cached_predict_original_embeddings):
+        logger.info("Loading pred original embeddings from cached file %s", cached_predict_original_embeddings)
+        original_embeddings = torch.load(cached_predict_original_embeddings)
+    else:
         original_dataset, _ = load_and_cache_examples(args, args.task_name, tokenizer, processor,
-                                                           data_type='eval_original')
+                                                            data_type='eval_original')
         original_sampler = SequentialSampler(original_dataset)
         original_dataset = DataLoader(original_dataset, sampler=original_sampler,batch_size=args.eval_batch_size)
         original_iterator = tqdm(original_dataset, desc="Original_Iteration",disable=args.local_rank not in [-1, 0])
         original_embeddings = []
-        eval_question_embeddings = []
         for step, batch in enumerate(original_iterator):
             model.eval()
             batch = tuple(t.to(args.device) for t in batch)
@@ -436,30 +360,19 @@ def predict(args, model, dataset,tokenizer,processor):
                 original_outputs = model(**original_inputs)[0].mean(1)
                 original_embeddings.append(original_outputs)
         original_embeddings = torch.cat([embed.cpu().data for embed in original_embeddings]).numpy()
-        for batch in tqdm(eval_dataloader, desc="Evaluating"):
-            model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
-            with torch.no_grad():
-                eval_question_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                eval_questions_outputs = model(**eval_question_inputs)[0].mean(1)
-                eval_question_embeddings.append(eval_questions_outputs)
-        eval_question_embeddings = torch.cat([o.cpu().data for o in eval_question_embeddings]).numpy()
+        torch.save(original_embeddings,cached_predict_original_embeddings)
 
-        scores = cosine_similarity(eval_question_embeddings, original_embeddings)
-    else:
-        for batch in tqdm(eval_dataloader, desc="Evaluating"):
-            model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
+    eval_question_embeddings = []
+    for batch in tqdm(eval_dataloader, desc="predicting"):
+        model.eval()
+        batch = tuple(t.to(args.device) for t in batch)
+        with torch.no_grad():
+            eval_question_inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
+            eval_questions_outputs = model(**eval_question_inputs)[0].mean(1)
+            eval_question_embeddings.append(eval_questions_outputs)
+    eval_question_embeddings = torch.cat([o.cpu().data for o in eval_question_embeddings]).numpy()
 
-            with torch.no_grad():
-                inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2]}
-                outputs = model(**inputs)
-
-                score = outputs[0]
-                scores.append(score)
-
-        scores = [score.data.cpu().view(-1) for score in scores]
-        scores = torch.cat(scores).numpy()
+    scores = cosine_similarity(eval_question_embeddings, original_embeddings)[0]
 
     return scores
 
@@ -467,14 +380,12 @@ def load_and_cache_examples(args, task, tokenizer,processor,data_type='eval_cosi
     """
         Load data features from cache or dataset file
     :param processor: 
-    :param data_type: eval_original、eval_cosine、eval_concate
+    :param data_type: eval_original、eval_cosine
     :return: 
     """
     cached_features_file = os.path.join(
         args.data_dir,
-        "cached_{}_{}_{}_{}".format(
-            "evaluate",
-            str(args.max_seq_length),
+        "cached_{}_{}".format(
             str(task),
             data_type
         ),
@@ -531,26 +442,16 @@ def load_train_examples(args,task,tokenizer,processor):
         )
         features.append(feature)
     # Convert to Tensors and build dataset
-    if args.loss_type == 'concate':
-        pos_input_ids = torch.tensor([f.input_ids for f in features[0]], dtype=torch.long)
-        pos_attention_mask = torch.tensor([f.attention_mask for f in features[0]], dtype=torch.long)
-        pos_token_type_ids = torch.tensor([f.token_type_ids for f in features[0]], dtype=torch.long)
-        neg_input_ids = torch.tensor([f.input_ids for f in features[1]], dtype=torch.long)
-        neg_attention_mask = torch.tensor([f.attention_mask for f in features[1]], dtype=torch.long)
-        neg_token_type_ids = torch.tensor([f.token_type_ids for f in features[1]], dtype=torch.long)
-        dataset = TensorDataset(pos_input_ids, pos_attention_mask, pos_token_type_ids, neg_input_ids,
-                                neg_attention_mask, neg_token_type_ids)
-    elif args.loss_type == 'cosine':
-        original_input_ids = torch.tensor([f.input_ids for f in features[0]], dtype=torch.long)
-        original_attention_mask = torch.tensor([f.attention_mask for f in features[0]], dtype=torch.long)
-        original_token_type_ids = torch.tensor([f.token_type_ids for f in features[0]], dtype=torch.long)
-        pos_input_ids = torch.tensor([f.input_ids for f in features[1]], dtype=torch.long)
-        pos_attention_mask = torch.tensor([f.attention_mask for f in features[1]], dtype=torch.long)
-        pos_token_type_ids = torch.tensor([f.token_type_ids for f in features[1]], dtype=torch.long)
-        neg_input_ids = torch.tensor([f.input_ids for f in features[2]], dtype=torch.long)
-        neg_attention_mask = torch.tensor([f.attention_mask for f in features[2]], dtype=torch.long)
-        neg_token_type_ids = torch.tensor([f.token_type_ids for f in features[2]], dtype=torch.long)
-        dataset = TensorDataset(original_input_ids, original_attention_mask, original_token_type_ids,
+    original_input_ids = torch.tensor([f.input_ids for f in features[0]], dtype=torch.long)
+    original_attention_mask = torch.tensor([f.attention_mask for f in features[0]], dtype=torch.long)
+    original_token_type_ids = torch.tensor([f.token_type_ids for f in features[0]], dtype=torch.long)
+    pos_input_ids = torch.tensor([f.input_ids for f in features[1]], dtype=torch.long)
+    pos_attention_mask = torch.tensor([f.attention_mask for f in features[1]], dtype=torch.long)
+    pos_token_type_ids = torch.tensor([f.token_type_ids for f in features[1]], dtype=torch.long)
+    neg_input_ids = torch.tensor([f.input_ids for f in features[2]], dtype=torch.long)
+    neg_attention_mask = torch.tensor([f.attention_mask for f in features[2]], dtype=torch.long)
+    neg_token_type_ids = torch.tensor([f.token_type_ids for f in features[2]], dtype=torch.long)
+    dataset = TensorDataset(original_input_ids, original_attention_mask, original_token_type_ids,
                                 pos_input_ids, pos_attention_mask, pos_token_type_ids,
                                 neg_input_ids, neg_attention_mask, neg_token_type_ids)
 
@@ -566,12 +467,9 @@ def main():
     parser.add_argument("--model_type",default='bert',type=str,required=False,
         help="Model type selected in the list")
 
-    parser.add_argument("--loss_type",default="cosine",type=str,required=False,
-                        choices=['cosine','concate'])
-
     parser.add_argument("--model_name_or_path",default='D:\\NLP\\my-wholes-models\\chinese_wwm_pytorch\\',type=str,required=False,
         help="Path to pre-trained model or shortcut name selected in the list",)
-    parser.add_argument("--task_name",default='synonymous_faq',type=str,required=False,
+    parser.add_argument("--task_name",default='synonymous',type=str,required=False,
         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()),)
     parser.add_argument("--output_dir",default='./models/synonymous_model',type=str,required=False,
         help="The output directory where the model predictions and checkpoints will be written.",)
@@ -584,7 +482,7 @@ def main():
              "than this will be truncated, sequences shorter will be padded.",)
     parser.add_argument("--do_train",default=True, action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval",default=True, action="store_true", help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_predict", action="store_true", help="Whether to predict.")
+    parser.add_argument("--do_predict",default=True, action="store_true", help="Whether to predict.")
     parser.add_argument(
         "--evaluate_during_training" ,action="store_true", help="Rul evaluation during training at each logging step."
     )
@@ -696,10 +594,7 @@ def main():
 
     args.model_type = args.model_type.lower()
     config_class, tokenizer_class = MODEL_CLASS[args.model_type]
-    if args.loss_type == 'concate':
-        model_class = BertForFAQHinge
-    elif args.loss_type == 'cosine':
-        model_class = BertModel
+    model_class = BertModel
     config = config_class.from_pretrained(
         args.model_name_or_path,
         finetuning_task=args.task_name,
@@ -767,9 +662,8 @@ def main():
 
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
-            data_type = 'eval_cosine' if args.loss_type == 'cosine' else 'eval_concate'
             eval_dataset, matched_questions_indexs = load_and_cache_examples(args, args.task_name, tokenizer, processor,
-                                                                             data_type=data_type)
+                                                                             data_type='eval_cosine')
             result = evaluate(args, model, tokenizer, processor, eval_dataset, matched_questions_indexs,prefix=prefix)
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
             results.update(result)
@@ -782,10 +676,7 @@ def main():
             title = input("你的问题是？\n")
             if len(title.strip()) == 0:
                 continue
-            if args.loss_type == 'cosine':
-                examples = [InputExample(guid=0, text_a=title, text_b=None, label=1)]
-            else:
-                examples = [InputExample(guid=0, text_a=title, text_b=c, label=1) for c in candidate_title]
+            examples = [InputExample(guid=0, text_a=title, text_b=None, label=1)]
             features = convert_examples_to_features(
                     examples,
                     tokenizer,
