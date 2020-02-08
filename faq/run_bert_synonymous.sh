@@ -1,4 +1,4 @@
-export TASK_NAME=synonymous_faq
+export TASK_NAME=synonymous
 
 python bert_synonymous.py \
     --model_type bert \
