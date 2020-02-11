@@ -200,7 +200,7 @@ def train(args,model, data,loss_fn,eval_data):
             # 总单词数
 
             if (it+1) % 100 == 0:
-                loss_scalar = (total_loss - logg_loss) / (total_num_words-logg_num_words) / 100
+                loss_scalar = (total_loss - logg_loss) / (total_num_words-logg_num_words)
                 logg_num_words = total_num_words
                 logg_loss = total_loss
 
@@ -249,6 +249,7 @@ def evaluate(args,model, data,loss_fn):
             total_loss += loss.item() * num_words
             total_num_words += num_words
     print("Evaluation loss", total_loss/total_num_words)
+    return total_loss/total_num_words
 
 
 def main():
@@ -257,11 +258,11 @@ def main():
     parse.add_argument("--data_dir",default='./nmt/en-cn/',type=str,required=False,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",)
     parse.add_argument("--batch_size", default=16, type=int)
-    parse.add_argument("--do_train",default=True, action="store_true", help="Whether to run training.")
+    parse.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parse.add_argument("--do_translate", default=True, action="store_true", help="Whether to run training.")
     parse.add_argument("--learnning_rate", default=5e-4, type=float)
     parse.add_argument("--dropout", default=0.2, type=float)
-    parse.add_argument("--num_epoch", default=20, type=int)
+    parse.add_argument("--num_epoch", default=10, type=int)
     parse.add_argument("--max_vocab_size",default=50000,type=int)
     parse.add_argument("--embed_size",default=300,type=int)
     parse.add_argument("--enc_hidden_size", default=512, type=int)
@@ -283,6 +284,8 @@ def main():
     decoder = Decoder(processor.cn_tokenizer.vocab_size,args.embed_size,
                       args.enc_hidden_size,args.dec_hidden_size,args.dropout)
     model = seq2seq(encoder,decoder)
+    if os.path.exists("translate-best.th"):
+        model.load_state_dict(torch.load("translate-best.th"))
     model.to(device)
     loss_fn = LanguageModelCriterion().to(device)
 
@@ -293,7 +296,7 @@ def main():
         train(args,model,train_data,loss_fn,eval_data)
 
     if args.do_translate:
-        model.load_state_dict("translate-best.th")
+        model.load_state_dict(torch.load("translate-best.th"))
         model.to(device)
         while True:
             title = input("请输入要翻译的英文句子:\n")

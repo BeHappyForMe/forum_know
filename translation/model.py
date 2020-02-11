@@ -151,7 +151,7 @@ class seq2seq(nn.Module):
     def translate(self,x,x_lengths,y,max_length=100):
         encoder_out,hid = self.encoder(x,x_lengths)
 
-        batch_size = x.shape[1]
+        batch_size = x.shape[0]
         preds = []
         attens = []
         for i in range(max_length):
