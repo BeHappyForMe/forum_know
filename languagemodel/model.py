@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class RNNModel(nn.Module):
-    def __init__(self,rnn_type,vocab_size,embed_size,hidden_size,num_layers,dropout=0.5):
+    def __init__(self,weight_matrix,rnn_type,vocab_size,embed_size,hidden_size,num_layers,dropout=0.5):
         super(RNNModel,self).__init__()
         '''
             模型包含以下几层:
@@ -13,6 +13,7 @@ class RNNModel(nn.Module):
         '''
         self.dropout = nn.Dropout(dropout)
         self.embedding = nn.Embedding(vocab_size,embed_size)
+        self.embedding.weight = nn.Parameter(torch.tensor(weight_matrix),requires_grad=False)
 
         if rnn_type in ['LSTM','GRU']:
             self.rnn = getattr(nn,rnn_type)(embed_size,hidden_size,num_layers,
@@ -35,7 +36,7 @@ class RNNModel(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        self.embedding.weight.data.uniform_(-initrange,initrange)
+        # self.embedding.weight.data.uniform_(-initrange,initrange)
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange,initrange)
 

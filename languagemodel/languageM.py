@@ -22,6 +22,7 @@ import scipy
 from scipy import stats,spatial
 import copy
 from tqdm import tqdm,trange
+import os
 
 from model import RNNModel
 
@@ -41,7 +42,13 @@ def preprocess_data(args):
         test='text8.test.txt',
         text_field = TEXT
     )
-    TEXT.build_vocab(train,max_size=args.max_vocab_size)
+    cache = 'mycache'
+    if not os.path.exists(cache):
+        os.mkdir(cache)
+    vectors = Vectors(name='/Users/zhoup/wordEmbedding/glove/glove.6B.300d.txt',cache=cache)
+    # vectors.unk_init = nn.init.xavier_uniform_
+
+    TEXT.build_vocab(train,vectors=vectors)
     VOCAB_SIZE = len(TEXT.vocab)
     train_iter,dev_iter,test_iter = torchtext.data.BPTTIterator.splits(
         (train,dev,test),
@@ -51,14 +58,14 @@ def preprocess_data(args):
         repeat = False,
         shuffle = True,
     )
-    return VOCAB_SIZE,train_iter,dev_iter,test_iter
+    return VOCAB_SIZE,train_iter,dev_iter,test_iter,TEXT.vocab.vectors
 
 def train(args,model,train_iter,val_iter,loss_fn,VOCAB_SIZE):
     LOG_FILE = "language_model_GRU.log"
     tb_writer = SummaryWriter('./runs')
 
     t_total = args.num_epoch * len(train_iter)
-    optimizer = AdamW(model.parameters(), lr=args.learnning_rate, eps=1e-8)
+    optimizer = AdamW(filter(lambda p : p.requires_grad,model.parameters()), lr=args.learnning_rate, eps=1e-8)
     scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=args.warmup_steps,
                                                 num_training_steps=t_total)
     tr_loss = 0.
@@ -180,9 +187,9 @@ def main():
 
     setseed()
 
-    VOCAB_SIZE, train_iter, dev_iter, test_iter = preprocess_data(args)
+    VOCAB_SIZE, train_iter, dev_iter, test_iter,weight_matrix = preprocess_data(args)
 
-    model = RNNModel('GRU',VOCAB_SIZE,args.embed_size,args.hidden_size,args.num_layers)
+    model = RNNModel(weight_matrix,'GRU',VOCAB_SIZE,args.embed_size,args.hidden_size,args.num_layers)
     model.to(device)
 
     loss_fn = nn.CrossEntropyLoss()  # 交叉熵损失
