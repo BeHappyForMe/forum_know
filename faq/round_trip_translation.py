@@ -2,17 +2,10 @@ import pandas as pd
 import json
 import requests
 import time
-from threading import Lock
-import threading
 
+pd_all = pd.read_csv('../data/baoxian_right.csv', sep='\t')
+best_title = pd_all['best_title'].tolist()
 
-'''
-    借助有道词典通过回译方式构建同义句对
-'''
-synonymous = []
-num_thread_all = 8
-num_thread_ing = 0
-ip = None
 
 def translate(word, ip):
     # 有道词典 api
@@ -42,16 +35,27 @@ def translate(word, ip):
         # 相应失败就返回空
         return None
 
-# 获取代理ip
+
 def get_ip(url):
     ip_text = requests.get(url)
     ip_text = ip_text.text
     while ip_text.find('提取太频繁') != -1:
-        print('提取太频繁')
         time.sleep(5)
+        print('提取太频繁')
         ip_text = requests.get(url)
         ip_text = ip_text.text
     return ip_text.strip()
+
+
+num_thread_all = 15
+num_thread_ing = 0
+ip = None
+flag = True  # 表示线程可前进
+synonymous = []
+synonymous.append("best_title" + '\t' + "translated" + '\n')
+from threading import Lock
+import threading
+lock = Lock()
 
 
 def get_synonymous_thread(line, index):
@@ -92,46 +96,35 @@ def get_synonymous_thread(line, index):
         pass
     num_thread_ing -= 1
 
-def main():
-    # 只取有正确答案的数据
-    pd_all = pd.read_csv('../data/baoxian_right.csv', sep='\t')
 
-    best_title = pd_all['best_title'].tolist()
+ip = get_ip(
+    'http://api.xdaili.cn/xdaili-api//greatRecharge/getGreatIp?spiderId=d4980dea2ab74a35907e9534fc146246&orderno=YZ2019840424LhDCX9&returnType=1&count=1')
 
-    # flag = True  # 表示线程可前进
-    # lock = Lock()
-    synonymous.append("best_title" + '\t' + "translated" + '\n')
+for idx, line in enumerate(best_title):
+    while True:
+        if num_thread_ing < num_thread_all:
 
-    ip = get_ip('http://api.xdaili.cn/xdaili-api//greatRecharge/getGreatIp?spiderId=d4980dea2ab74a35907e9534fc146246&orderno=YZ2019840424LhDCX9&returnType=1&count=1')
+            num_thread_ing += 1
+            threading.Thread(target=get_synonymous_thread, args=(line, num_thread_ing)).start()
 
-    for idx, line in enumerate(best_title):
-        while True:
-            if num_thread_ing < num_thread_all:
+            idx = idx + 1
+            if idx % 500 == 0:
+                print(idx)
+                ip = get_ip(
+                    'http://api.xdaili.cn/xdaili-api//greatRecharge/getGreatIp?spiderId=d4980dea2ab74a35907e9534fc146246&orderno=YZ2019840424LhDCX9&returnType=1&count=1')
 
-                num_thread_ing += 1
-                threading.Thread(target=get_synonymous_thread, args=(line, num_thread_ing)).start()
+            break
+        else:
+            time.sleep(1)
 
-                idx = idx + 1
-                if idx % 500 == 0:
-                    print(idx)
-                    ip = get_ip(
-                        'http://api.xdaili.cn/xdaili-api//greatRecharge/getGreatIp?spiderId=d4980dea2ab74a35907e9534fc146246&orderno=YZ2019840424LhDCX9&returnType=1&count=1')
+with open('../data/baoxian_synonymous.csv', 'w', encoding='utf-8') as file:
+    file.writelines(synonymous)
 
-                break
-            else:
-                time.sleep(1)
-
-    with open('../data/baoxian_synonymous.csv', 'w', encoding='utf-8') as file:
-        file.writelines(synonymous)
-
-
-    translated = pd.read_csv('../data/baoxian_synonymous.csv', sep='\t', header=0)
-    merged = pd_all.merge(translated, left_on='best_title', right_on='best_title')
-    merged[['best_title', 'translated', 'reply', 'is_best']].to_csv('../data/baoxian_preprocessed_synonymous.csv',
+translated = pd.read_csv('../data/baoxian_synonymous.csv', sep='\t', header=0)
+merged = pd_all.merge(translated, left_on='best_title', right_on='best_title')
+merged[['best_title', 'translated', 'reply', 'is_best']].drop_duplicates(inplace=True)
+merged[['best_title', 'translated', 'reply', 'is_best']].to_csv('../data/baoxian_preprocessed_synonymous.csv',
                                                                     index=False, sep='\t')
-
-if __name__ == '__main__':
-    main()
 
 
 
