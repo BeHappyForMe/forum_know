@@ -123,31 +123,19 @@ def evaluate(args,model,dataset):
 
 
 def load_examples(args,tokenizer):
+    """获取原数据库里的问题features"""
     processor = FAQProcessor()
-    # Load data features from cache or dataset file
-    cached_features_file = "cached_{}_{}_{}_{}".format(
-            list(filter(None, args.model_name_or_path.split("/"))).pop(),
-            str(args.max_seq_length),
-            str(args.task_name),
-            "features",
-        )
-    if os.path.exists(cached_features_file):
-        features = torch.load(cached_features_file)
-    else:
-        examples = processor.get_candidates(args.data_dir)
-        features = convert_examples_to_features(
-            examples,
-            tokenizer,
-            label_list=[1],
-            output_mode="classification",
-            max_length=args.max_seq_length,
-            pad_on_left=bool(args.model_type in ["xlnet"]),
-            pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-            pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
-        )
-        logger.info("saving features into cachefile %s",cached_features_file)
-        torch.save(features,cached_features_file)
-
+    examples = processor.get_candidates(args.data_dir)
+    features = convert_examples_to_features(
+        examples,
+        tokenizer,
+        label_list=[1],
+        output_mode="classification",
+        max_length=args.max_seq_length,
+        pad_on_left=bool(args.model_type in ["xlnet"]),
+        pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+        pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+    )
     all_input_ids = torch.tensor([f.input_ids for f in features],dtype=torch.long)
     all_attention_mask = torch.tensor([f.attention_mask for f in features],dtype=torch.long)
     all_token_type_ids = torch.tensor([f.token_type_ids for f in features],dtype=torch.long)
@@ -177,14 +165,14 @@ def main():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        default="../../data/baoxian_right.csv",
+        default="../data/right_samples.csv",
         type=str,
         required=False,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
     parser.add_argument(
         "--evaluate_dir",
-        default="../../data/baoxian_evaluate.csv",
+        default="../data/eval_touzi.xlsx",
         type=str,
         required=False,
         help="The evaluate data dir. Should contain the .tsv files (or other data files) for the task.",
@@ -199,7 +187,7 @@ def main():
     )
     parser.add_argument(
         "--model_name_or_path",
-        default='/Users/zhoup/develop/NLPSpace/my-pre-models/chinese_wwm_pytorch',
+        default='D:\\NLP\\my-wholes-models\\chinese_wwm_pytorch\\',
         type=str,
         required=False,
         help="Path to pre-trained model or shortcut name selected in the list",
@@ -245,7 +233,7 @@ def main():
              "than this will be truncated, sequences shorter will be padded.",
     )
     parser.add_argument("--do_predict",default=True, action="store_true", help="Whether to run training.")
-    parser.add_argument("--do_eval",default=True, action="store_true", help="Whether to run eval on the dev set.")
+    parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
     parser.add_argument(
         "--do_lower_case",default=True, action="store_true", help="Set this flag if you are using an uncased model."
     )
@@ -371,13 +359,14 @@ def main():
         candidate_title, candidate_reply, candidate_embeddings = torch.load("embeddings.pkl")
 
     if args.do_eval:
-        evulate_df = pd.read_csv(args.evaluate_dir, sep='\t')
-        evulate_df = evulate_df[['your_question', 'matched_question']]
-        evulate_df = evulate_df[evulate_df['your_question'].notna()]
-        evulate_df = evulate_df[evulate_df['matched_question'].notna()]
-        questions = evulate_df['your_question'].tolist()
-        matched_questions = evulate_df['matched_question'].tolist()
+        evulate_df = pd.read_excel(args.evaluate_dir, '投资知道')
+        evulate_df = evulate_df[['问题', '匹配问题']]
+        evulate_df = evulate_df[evulate_df['问题'].notna()]
+        evulate_df = evulate_df[evulate_df['匹配问题'].notna()]
+        questions = evulate_df['问题'].tolist()
+        matched_questions = evulate_df['匹配问题'].tolist()
         matched_questions_indexs = []
+        # 找出匹配问题对应的index
         for k, q in enumerate(matched_questions):
             flag = False
             for i, _q in enumerate(candidate_title):

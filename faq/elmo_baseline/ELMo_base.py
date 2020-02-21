@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 from sklearn.metrics.pairwise import cosine_similarity
 import code
+from tqdm import trange,tqdm
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ import sys
 sys.path.append("..")
 from metric import mean_reciprocal_rank,mean_average_precision
 
-e = Embedder('/Users/zhoup/develop/NLPSpace/my-pre-models/zhs.model')
+e = Embedder('D:\\NLP\\my-wholes-models\\zhs.model')
 seg = pkuseg.pkuseg()
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,11 @@ handler2.setFormatter(formatter)
 logger.addHandler(handler2)
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_file", default='../../data/baoxian_right.csv', type=str, required=False,
+    parser.add_argument("--train_file", default='../data/right_samples.csv', type=str, required=False,
                         help="training file")
-    parser.add_argument("--evaluate_file", default='../../data/baoxian_evaluate.csv', type=str, required=False,
+    parser.add_argument("--evaluate_file", default='../data/eval_touzi.xlsx', type=str, required=False,
                         help="training file")
-    parser.add_argument("--do_evaluate",default=True,action="store_true",help="Whether to run evaluate.")
+    parser.add_argument("--do_evaluate",action="store_true",help="Whether to run evaluate.")
     parser.add_argument("--do_predict",default=True,action="store_true",help="Whether to run predict.")
 
     parser.add_argument("--batch_size", default=16, type=int, required=False,
@@ -42,10 +43,19 @@ def main():
         candidate_title = train_df['best_title'].tolist()
         candidate_reply = train_df["reply"].tolist()
 
-        titels = [seg.cut(titel) for titel in candidate_title]
-        embeddings = e.sents2elmo(titels)
-        # 获取句子向量，对词取平均
-        embeddings = [np.mean(embedding,axis=0) for embedding in embeddings]
+        titels = []
+        for title in tqdm(candidate_title,desc='对原问题进行分词ing'):
+            titels.append(seg.cut(title))
+        embeddings = []
+        for i in trange(0,len(titels),16,desc='获取ELMo的句子表示'):
+            mini_embeddings = e.sents2elmo(titels[i:min(len(titels),i+16)])
+            for mini_embedding in mini_embeddings:
+                # 获取句子向量，对词取平均
+                embeddings.append(np.mean(mini_embedding,axis=0))
+            if i==0:
+                print(len(embeddings))
+                print(embeddings[0].shape)
+        print("原始问题句子向量表示获取完毕，保存ing")
         with open("embeddings.pkl",'wb') as fout:
             pickle.dump([candidate_title,candidate_reply,embeddings],fout)
     else:
@@ -53,14 +63,14 @@ def main():
             candidate_title,candidate_reply,embeddings = pickle.load(fint)
 
     if args.do_evaluate:
-        evulate_df = pd.read_csv(args.evaluate_file, sep='\t')
+        evulate_df = pd.read_excel(args.evaluate_file, '投资知道')
         # code.interact(local=locals())
-        evulate_df = evulate_df[['your_question', 'matched_question']]
-        evulate_df = evulate_df[evulate_df['your_question'].notna()]
-        evulate_df = evulate_df[evulate_df['matched_question'].notna()]
+        evulate_df = evulate_df[['问题', '匹配问题']]
+        evulate_df = evulate_df[evulate_df['问题'].notna()]
+        evulate_df = evulate_df[evulate_df['匹配问题'].notna()]
 
-        questions = evulate_df['your_question'].tolist()
-        matched_questions = evulate_df['matched_question'].tolist()
+        questions = evulate_df['问题'].tolist()
+        matched_questions = evulate_df['匹配问题'].tolist()
         matched_questions_indexs = []
         for k, q in enumerate(matched_questions):
             flag = False

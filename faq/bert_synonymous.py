@@ -71,7 +71,7 @@ class FAQProcessor(DataProcessor):
         )
 
     def prepare_data(self,file_dir):
-        train_df = pd.read_csv(file_dir+'baoxian_preprocessed_synonymous.csv',sep='\t')
+        train_df = pd.read_csv(file_dir+'touzi_preprocessed_synonymous.csv',sep='\t')
         self.candidate_title = train_df['best_title'].astype("str").tolist()
         self.candidate_reply = train_df['reply'].astype("str").tolist()
         self.candidate_translated = train_df['translated'].astype("str").tolist()
@@ -88,13 +88,14 @@ class FAQProcessor(DataProcessor):
             examples = [InputExample(guid="%s_%s_%s" % ('eval', data_type, idx), text_a=title, text_b=None, label=1) 
                         for idx,title in enumerate(self.candidate_title)]
         else:
-            evulate_df = pd.read_csv(file_dir + 'baoxian_evaluate.csv', sep='\t')
-            evulate_df = evulate_df[['your_question', 'matched_question']]
-            evulate_df = evulate_df[evulate_df['your_question'].notna()]
-            evulate_df = evulate_df[evulate_df['matched_question'].notna()]
+            #  eval data
+            evulate_df = pd.read_excel(file_dir + 'eval_touzi.xlsx', '投资知道')
+            evulate_df = evulate_df[["问题", "匹配问题"]]
+            evulate_df = evulate_df[evulate_df['问题'].notna()]
+            evulate_df = evulate_df[evulate_df['匹配问题'].notna()]
 
-            questions = evulate_df['your_question'].tolist()
-            matched_questions = evulate_df['matched_question'].tolist()
+            questions = evulate_df['问题'].tolist()
+            matched_questions = evulate_df['匹配问题'].tolist()
             # 用于计算mrr指标
             matched_questions_indexs = []
             for q in matched_questions:
@@ -119,6 +120,8 @@ class FAQProcessor(DataProcessor):
         pos_examples = []
         neg_examples = []
         for (i, (line_a, line_b)) in enumerate(zip(lines_a, lines_b)):
+            if (i+1)%5000 == 0:
+                print("create examples:{}".format(i))
             original_guid = "%s_%s_%s" % ("train",'original', i)
             original_examples.append(InputExample(guid=original_guid, text_a=line_a, text_b=None, label=1))
 
@@ -140,7 +143,7 @@ class FAQProcessor(DataProcessor):
 def train(args, train_dataset, model, processor, tokenizer):
     """ train the model """
     if args.local_rank in [-1, 0]:
-        tb_writer = SummaryWriter('./runs/bert_syno/'+args.loss_type)
+        tb_writer = SummaryWriter('./runs/bert_syno')
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -181,7 +184,7 @@ def train(args, train_dataset, model, processor, tokenizer):
     set_seed(args)
     for k in train_iterator:
         if k!=0:
-            train_dataset,_,_= load_train_examples(args,args.task_name,tokenizer,processor)
+            train_dataset = load_train_examples(args,args.task_name,tokenizer,processor)
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
         train_sampler = SequentialSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,sampler=train_sampler,batch_size=args.train_batch_size)
@@ -455,14 +458,14 @@ def load_train_examples(args,task,tokenizer,processor):
                                 pos_input_ids, pos_attention_mask, pos_token_type_ids,
                                 neg_input_ids, neg_attention_mask, neg_token_type_ids)
 
-    return dataset, processor.candidate_title, processor.candidate_reply
+    return dataset
 
 
 def main():
     parser = argparse.ArgumentParser()
 
     # Required parameters
-    parser.add_argument("--data_dir",default='../data/',type=str,required=False,
+    parser.add_argument("--data_dir",default='./data/',type=str,required=False,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",)
     parser.add_argument("--model_type",default='bert',type=str,required=False,
         help="Model type selected in the list")
@@ -481,8 +484,8 @@ def main():
         help="The maximum total input sequence length after tokenization. Sequences longer "
              "than this will be truncated, sequences shorter will be padded.",)
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
-    parser.add_argument("--do_eval",default=True, action="store_true", help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_predict", action="store_true", help="Whether to predict.")
+    parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
+    parser.add_argument("--do_predict",default=True, action="store_true", help="Whether to predict.")
     parser.add_argument(
         "--evaluate_during_training" ,action="store_true", help="Rul evaluation during training at each logging step."
     )
@@ -501,12 +504,12 @@ def main():
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--margin", default=1, type=float, help="The margin of hinge loss.")
-    parser.add_argument("--learning_rate", default=1e-5, type=float, help="The initial learning rate for Adam.")
+    parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
     parser.add_argument(
-        "--num_train_epochs", default=10.0, type=float, help="Total number of training epochs to perform."
+        "--num_train_epochs", default=5.0, type=float, help="Total number of training epochs to perform."
     )
     parser.add_argument(
         "--max_steps",
@@ -517,7 +520,7 @@ def main():
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
 
     parser.add_argument("--logging_steps", type=int, default=200, help="Log every X updates steps.")
-    parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=40000, help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--eval_all_checkpoints",
         default=True,
@@ -621,8 +624,10 @@ def main():
 
     processor = FAQProcessor()
     processor.prepare_data(args.data_dir)
-    dataset, candidate_title, candidate_reply = load_train_examples(args, args.task_name, tokenizer, processor)
+    candidate_title, candidate_reply = processor.candidate_title, processor.candidate_reply
+
     if args.do_train:
+        dataset = load_train_examples(args, args.task_name, tokenizer, processor)
         train(args, dataset, model, processor, tokenizer)
         # Create output directory if needed
         if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
@@ -670,7 +675,7 @@ def main():
 
     if args.do_predict:
         model = model_class.from_pretrained(args.output_dir)
-        tokenizer = tokenizer_class.from_pretrained(args.output_dir)
+        tokenizer = tokenizer_class.from_pretrained(args.output_dir + '/checkpoint-200000')
         model.to(args.device)
         while True:
             title = input("你的问题是？\n")
